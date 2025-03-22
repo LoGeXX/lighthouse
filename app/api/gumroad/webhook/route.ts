@@ -1,3 +1,5 @@
+export const runtime = "nodejs" // Add this line at the top
+
 import { NextResponse } from "next/server"
 import { createClient } from "@vercel/postgres"
 import { v4 as uuidv4 } from "uuid"

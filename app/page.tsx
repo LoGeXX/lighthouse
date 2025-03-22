@@ -7,20 +7,23 @@ export default function Home() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        padding: "6rem",
+        padding: "2rem",
       }}
     >
-      <h1 style={{ fontSize: "2.5rem", fontWeight: "bold", marginBottom: "1.5rem" }}>Lighthouse Pro</h1>
-      <p style={{ fontSize: "1.25rem", marginBottom: "1rem" }}>License Management System</p>
+      <h1 style={{ fontSize: "2rem", marginBottom: "1rem" }}>Lighthouse Pro - License Management</h1>
+      <p style={{ marginBottom: "2rem" }}>API endpoints are active and ready to use</p>
       <div
         style={{
-          backgroundColor: "#f0fff4",
-          color: "#276749",
+          backgroundColor: "#f0f0f0",
           padding: "1rem",
-          borderRadius: "0.375rem",
+          borderRadius: "0.5rem",
+          maxWidth: "600px",
+          width: "100%",
+          textAlign: "center",
         }}
       >
-        API endpoints are active and ready to use
+        <p>This is an API service. There is no UI to interact with directly.</p>
+        <p>why are you here bro?</p>
       </div>
     </main>
   )
