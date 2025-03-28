@@ -32,23 +32,35 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Log the request body for debugging
-    const requestBody = await request.json()
+    // Parse the request body
+    let requestBody
+    try {
+      requestBody = await request.json()
+    } catch (error) {
+      console.error("Error parsing request body:", error)
+      return NextResponse.json(
+        { success: false, valid: false, message: "Invalid request body" },
+        { status: 400, headers: corsHeaders },
+      )
+    }
+
     console.log("Validate request body:", JSON.stringify(requestBody, null, 2))
 
-    const { key, gumroadLicenseKey, deviceId, machineId, gumroadValidated } = requestBody
+    const { gumroadLicenseKey, deviceId, machineId } = requestBody
 
-    // Determine which key to use - prioritize gumroadLicenseKey
-    const licenseKey = gumroadLicenseKey || key
-
-    if (!licenseKey || !deviceId || !machineId) {
-      console.log("Missing required fields:", { licenseKey, deviceId, machineId })
+    if (!gumroadLicenseKey) {
+      console.log("Missing license key")
       return NextResponse.json(
-        { error: "Missing required fields" },
-        {
-          status: 400,
-          headers: corsHeaders,
-        },
+        { success: false, valid: false, message: "License key is required" },
+        { status: 400, headers: corsHeaders },
+      )
+    }
+
+    if (!deviceId || !machineId) {
+      console.log("Missing device or machine ID")
+      return NextResponse.json(
+        { success: false, valid: false, message: "Device ID and Machine ID are required" },
+        { status: 400, headers: corsHeaders },
       )
     }
 
@@ -56,42 +68,17 @@ export async function POST(request: Request) {
     await client.connect()
 
     try {
-      // First try with gumroadLicenseKey field
-      console.log(`Checking for gumroadLicenseKey: ${licenseKey}`)
-      let keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE gumroad_license_key = $1', [
-        licenseKey,
+      // Check for the license key in the gumroad_license_key field
+      console.log(`Checking for gumroadLicenseKey: ${gumroadLicenseKey}`)
+      const keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE gumroad_license_key = $1', [
+        gumroadLicenseKey,
       ])
-
-      // If not found, try with the key field as fallback
-      if (keyResult.rows.length === 0) {
-        console.log(`No match for gumroadLicenseKey, checking key field: ${licenseKey}`)
-        keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [licenseKey])
-      }
-
-      // If still not found and it was validated by Gumroad, create a new entry
-      if (keyResult.rows.length === 0 && gumroadValidated) {
-        console.log(`No existing key found, creating new entry for Gumroad key: ${licenseKey}`)
-        await client.query(
-          `INSERT INTO "SerialKeys" (id, key, email, gumroad_license_key, purchased_at, is_active, created_at)
-           VALUES (uuid_generate_v4(), $1, $2, $1, NOW(), true, NOW())`,
-          [licenseKey, "gumroad-user@example.com"],
-        )
-
-        // Get the newly created key
-        keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE gumroad_license_key = $1', [
-          licenseKey,
-        ])
-      }
 
       if (keyResult.rows.length === 0) {
         console.log("No matching key found in database")
-        await client.end()
         return NextResponse.json(
-          { valid: false, message: "Invalid serial key" },
-          {
-            status: 200, // Changed from 400 to 200 to avoid CORS issues
-            headers: corsHeaders,
-          },
+          { success: false, valid: false, message: "Invalid license key" },
+          { headers: corsHeaders },
         )
       }
 
@@ -99,14 +86,10 @@ export async function POST(request: Request) {
       const isKeyActive = keyResult.rows[0].is_active
 
       if (!isKeyActive) {
-        console.log("Key is not active:", licenseKey)
-        await client.end()
+        console.log("Key is not active:", gumroadLicenseKey)
         return NextResponse.json(
-          { valid: false, message: "This serial key has been deactivated" },
-          {
-            status: 200, // Changed from 400 to 200
-            headers: corsHeaders,
-          },
+          { success: false, valid: false, message: "This license key has been deactivated" },
+          { headers: corsHeaders },
         )
       }
 
@@ -118,12 +101,9 @@ export async function POST(request: Request) {
 
       if (activationResult.rows.length > 0 && activationResult.rows[0].is_active) {
         console.log("Device already activated with this key")
-        await client.end()
         return NextResponse.json(
-          { valid: true, activated: true },
-          {
-            headers: corsHeaders,
-          },
+          { success: true, valid: true, activated: true, message: "License is valid and activated on this device" },
+          { headers: corsHeaders },
         )
       }
 
@@ -135,16 +115,14 @@ export async function POST(request: Request) {
 
       if (otherActivationResult.rows.length > 0) {
         console.log("Key is already activated on another device")
-        await client.end()
         return NextResponse.json(
           {
+            success: true,
             valid: true,
             activated: false,
-            message: "This key is already activated on another device. Please deactivate it first.",
+            message: "This license key is already activated on another device. Please deactivate it first.",
           },
-          {
-            headers: corsHeaders,
-          },
+          { headers: corsHeaders },
         )
       }
 
@@ -160,28 +138,28 @@ export async function POST(request: Request) {
         const hoursRemaining = Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60))
 
         console.log("Key is in cooldown period")
-        await client.end()
         return NextResponse.json(
           {
+            success: true,
             valid: true,
             activated: false,
             cooldown: true,
             cooldownEnds: endsAt,
-            message: `This key is in a cooldown period. Please try again in ${hoursRemaining} hours.`,
+            message: `This license key is in a cooldown period. Please try again in ${hoursRemaining} hours.`,
           },
-          {
-            headers: corsHeaders,
-          },
+          { headers: corsHeaders },
         )
       }
 
       console.log("Key is valid but not activated")
-      await client.end()
       return NextResponse.json(
-        { valid: true, activated: false },
         {
-          headers: corsHeaders,
+          success: true,
+          valid: true,
+          activated: false,
+          message: "License key is valid and ready to be activated",
         },
+        { headers: corsHeaders },
       )
     } finally {
       // Ensure client is closed even if there's an error
@@ -192,11 +170,13 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Error validating key:", error)
     return NextResponse.json(
-      { error: "Failed to validate key" },
       {
-        status: 500,
-        headers: corsHeaders,
+        success: false,
+        valid: false,
+        message: "Failed to validate license key",
+        error: error instanceof Error ? error.message : String(error),
       },
+      { status: 500, headers: corsHeaders },
     )
   }
 }
