@@ -4,14 +4,6 @@ import { NextResponse } from "next/server"
 import { v4 as uuidv4 } from "uuid"
 import { createClient } from "@vercel/postgres"
 
-// Add CORS headers to all responses
-function addCorsHeaders(response: NextResponse) {
-  response.headers.set("Access-Control-Allow-Origin", "*")
-  response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-  response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-  return response
-}
-
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
@@ -33,121 +25,127 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Parse the request body
-    let requestBody
-    try {
-      requestBody = await request.json()
-    } catch (error) {
-      console.error("Error parsing request body:", error)
-      return NextResponse.json(
-        { success: false, message: "Invalid request body" },
-        { status: 400, headers: corsHeaders },
-      )
-    }
-
+    // Log the request body for debugging
+    const requestBody = await request.json()
     console.log("Deactivate request body:", JSON.stringify(requestBody, null, 2))
 
-    const { gumroadLicenseKey, deviceId, machineId } = requestBody
+    const { key, deviceId, machineId } = requestBody
 
-    if (!gumroadLicenseKey) {
-      console.log("Missing license key")
+    if (!key || !deviceId || !machineId) {
+      console.log("Missing required fields:", { key, deviceId, machineId })
       return NextResponse.json(
-        { success: false, message: "License key is required" },
-        { status: 400, headers: corsHeaders },
+        { error: "Missing required fields" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
       )
     }
 
-    if (!deviceId || !machineId) {
-      console.log("Missing device or machine ID")
-      return NextResponse.json(
-        { success: false, message: "Device ID and Machine ID are required" },
-        { status: 400, headers: corsHeaders },
-      )
-    }
+    // Normalize the license key (remove any spaces, make uppercase)
+    const normalizedKey = key.replace(/\s+/g, "").toUpperCase()
 
     const client = createClient()
     await client.connect()
 
-    try {
-      // Check for the license key in the gumroad_license_key field
-      console.log(`Checking for gumroadLicenseKey: ${gumroadLicenseKey}`)
-      const keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE gumroad_license_key = $1', [
-        gumroadLicenseKey,
-      ])
+    // Log the query we're about to execute
+    console.log(`Checking for Gumroad license key: ${normalizedKey}`)
 
-      let serialKeyId
+    // First try with the exact key format
+    let licenseResult = await client.query(
+      'SELECT id FROM "Licenses" WHERE gumroad_license_key = $1 AND is_active = true',
+      [normalizedKey],
+    )
 
-      if (keyResult.rows.length === 0) {
-        console.log("No matching key found in database - assuming demo mode")
-
-        // For demo purposes, return success
-        return NextResponse.json(
-          {
-            success: true,
-            message: "Demo mode: License key deactivated successfully",
-            cooldownEnds: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 hours cooldown
-            demoMode: true,
-          },
-          { headers: corsHeaders },
-        )
+    // If no results, try with different formats (with or without hyphens)
+    if (licenseResult.rows.length === 0) {
+      // Try with hyphens if the key doesn't have them
+      if (!normalizedKey.includes("-")) {
+        // Format like XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX (assuming 8 chars per segment)
+        const keyWithHyphens = normalizedKey.match(/.{1,8}/g)?.join("-")
+        if (keyWithHyphens) {
+          licenseResult = await client.query(
+            'SELECT id FROM "Licenses" WHERE gumroad_license_key = $1 AND is_active = true',
+            [keyWithHyphens],
+          )
+        }
       } else {
-        serialKeyId = keyResult.rows[0].id
-      }
-
-      // Check if this device is activated with this key
-      const activationResult = await client.query(
-        'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND device_id = $2 AND machine_id = $3 AND is_active = true',
-        [serialKeyId, deviceId, machineId],
-      )
-
-      if (activationResult.rows.length === 0) {
-        console.log("Device is not activated with this key")
-        return NextResponse.json(
-          { success: false, message: "This device is not activated with this license key" },
-          { headers: corsHeaders },
+        // Try without hyphens if the key has them
+        const keyWithoutHyphens = normalizedKey.replace(/-/g, "")
+        licenseResult = await client.query(
+          'SELECT id FROM "Licenses" WHERE gumroad_license_key = $1 AND is_active = true',
+          [keyWithoutHyphens],
         )
-      }
-
-      const activationId = activationResult.rows[0].id
-
-      // Deactivate the activation
-      await client.query('UPDATE "Activations" SET is_active = false, deactivated_at = NOW() WHERE id = $1', [
-        activationId,
-      ])
-
-      // Create a cooldown period (2 hours)
-      const cooldownEnds = new Date(Date.now() + 2 * 60 * 60 * 1000) // 2 hours from now
-
-      await client.query(
-        `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
-         VALUES ($1, $2, NOW(), $3, true)`,
-        [uuidv4(), serialKeyId, cooldownEnds],
-      )
-
-      console.log("Key deactivated successfully")
-      return NextResponse.json(
-        {
-          success: true,
-          message: "License key deactivated successfully",
-          cooldownEnds: cooldownEnds,
-        },
-        { headers: corsHeaders },
-      )
-    } finally {
-      // Ensure client is closed even if there's an error
-      if (client) {
-        await client.end().catch(console.error)
       }
     }
-  } catch (error) {
-    console.error("Error deactivating key:", error)
+
+    if (licenseResult.rows.length === 0) {
+      console.log("No matching active license key found in database")
+      await client.end()
+      return NextResponse.json(
+        { success: false, message: "Invalid or inactive license key" },
+        {
+          status: 200, // Changed from 400 to 200
+          headers: corsHeaders,
+        },
+      )
+    }
+
+    const licenseId = licenseResult.rows[0].id
+
+    // Check if this device is activated with this license
+    const activationResult = await client.query(
+      'SELECT id FROM "Activations" WHERE license_id = $1 AND device_id = $2 AND machine_id = $3 AND is_active = true',
+      [licenseId, deviceId, machineId],
+    )
+
+    if (activationResult.rows.length === 0) {
+      console.log("Device is not activated with this license")
+      await client.end()
+      return NextResponse.json(
+        { success: false, message: "This device is not activated with this license" },
+        {
+          status: 200, // Changed from 400 to 200
+          headers: corsHeaders,
+        },
+      )
+    }
+
+    const activationId = activationResult.rows[0].id
+
+    // Deactivate the activation
+    await client.query('UPDATE "Activations" SET is_active = false, deactivated_at = NOW() WHERE id = $1', [
+      activationId,
+    ])
+
+    // Create a cooldown period (2 hours)
+    await client.query(
+      `INSERT INTO "CooldownPeriods" (id, license_id, started_at, ends_at, is_active)
+       VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
+      [uuidv4(), licenseId],
+    )
+
+    console.log("License deactivated successfully")
+    await client.end()
+
     return NextResponse.json(
       {
-        success: false,
-        message: "Failed to deactivate license key",
-        error: error instanceof Error ? error.message : String(error),
+        success: true,
+        message: "License deactivated successfully",
+        cooldownEnds: new Date(Date.now() + 2 * 60 * 60 * 1000),
       },
-      { status: 500, headers: corsHeaders },
+      {
+        headers: corsHeaders,
+      },
+    )
+  } catch (error) {
+    console.error("Error deactivating license:", error)
+    return NextResponse.json(
+      { error: "Failed to deactivate license" },
+      {
+        status: 500,
+        headers: corsHeaders,
+      },
     )
   }
 }
