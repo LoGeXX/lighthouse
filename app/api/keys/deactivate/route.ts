@@ -114,12 +114,33 @@ export async function POST(request: Request) {
       activationId,
     ])
 
-    // Create a cooldown period (2 hours)
-    await client.query(
-      `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
-       VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
-      [uuidv4(), serialKeyId],
+    // Check if there's an existing active cooldown period for this key
+    const existingCooldownResult = await client.query(
+      'SELECT id FROM "CooldownPeriods" WHERE serial_key_id = $1 AND is_active = true',
+      [serialKeyId],
     )
+
+    if (existingCooldownResult.rows.length > 0) {
+      // Update the existing cooldown period instead of creating a new one
+      await client.query(
+        `UPDATE "CooldownPeriods" 
+         SET started_at = NOW(), 
+             ends_at = NOW() + INTERVAL '2 hours' 
+         WHERE id = $1`,
+        [existingCooldownResult.rows[0].id],
+      )
+
+      console.log("Updated existing cooldown period")
+    } else {
+      // Create a new cooldown period (2 hours)
+      await client.query(
+        `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
+         VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
+        [uuidv4(), serialKeyId],
+      )
+
+      console.log("Created new cooldown period")
+    }
 
     // Clean up old cooldown periods
     await cleanupCooldownPeriods(client)

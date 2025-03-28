@@ -115,12 +115,36 @@ export async function POST(request: Request) {
 
     // Check if there's an active activation for this key (with a different device)
     const otherActivationResult = await client.query(
-      'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND is_active = true',
+      'SELECT id, device_id, machine_id FROM "Activations" WHERE serial_key_id = $1 AND is_active = true',
       [serialKeyId],
     )
 
     if (otherActivationResult.rows.length > 0) {
       console.log("Key is already activated on another device")
+
+      // Check if it's the same device with a different ID (this can happen if the device ID generation changes)
+      const otherDeviceId = otherActivationResult.rows[0].device_id
+      const otherMachineId = otherActivationResult.rows[0].machine_id
+
+      // If the machine ID is the same but device ID is different, we can consider it the same device
+      if (otherMachineId === machineId) {
+        console.log("Same machine detected with different device ID, updating activation")
+
+        // Update the activation with the new device ID
+        await client.query('UPDATE "Activations" SET device_id = $1 WHERE id = $2', [
+          deviceId,
+          otherActivationResult.rows[0].id,
+        ])
+
+        await client.end()
+        return NextResponse.json(
+          { valid: true, activated: true },
+          {
+            headers: corsHeaders,
+          },
+        )
+      }
+
       await client.end()
       return NextResponse.json(
         {
