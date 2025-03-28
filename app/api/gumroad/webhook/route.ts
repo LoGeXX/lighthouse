@@ -1,4 +1,4 @@
-export const runtime = "nodejs" // Add this line at the top
+export const runtime = "nodejs"
 
 import { NextResponse } from "next/server"
 import { createClient } from "@vercel/postgres"
@@ -7,7 +7,6 @@ import { randomBytes } from "crypto"
 
 // Function to generate a serial key
 function generateSerialKey() {
-  // Generate 5 groups of 5 alphanumeric characters separated by hyphens
   const segments = []
   for (let i = 0; i < 5; i++) {
     const segment = randomBytes(5).toString("hex").toUpperCase().substring(0, 5)
@@ -18,18 +17,89 @@ function generateSerialKey() {
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData()
+    // Log the request headers for debugging
+    const headers = Object.fromEntries(request.headers)
+    console.log("Webhook Headers:", JSON.stringify(headers, null, 2))
 
-    // Gumroad sends data as form data
-    const purchaseId = formData.get("sale_id") as string
-    const email = formData.get("email") as string
-    const licenseKey = formData.get("license_key") as string
-    const productId = formData.get("product_id") as string
+    // Try to parse as form data first
+    let purchaseId, email, licenseKey, productId
 
-    // Validate the webhook is from Gumroad for your product
-    // You should add your product ID check here
-    if (!purchaseId || !email || !licenseKey) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+    try {
+      const formData = await request.formData()
+
+      // Log all form data fields for debugging
+      const formDataObj: Record<string, any> = {}
+      formData.forEach((value, key) => {
+        formDataObj[key] = value
+      })
+      console.log("Form Data:", JSON.stringify(formDataObj, null, 2))
+
+      purchaseId = (formData.get("sale_id") as string) || (formData.get("purchase_id") as string)
+      email = formData.get("email") as string
+      licenseKey = formData.get("license_key") as string
+      productId = formData.get("product_id") as string
+    } catch (formError) {
+      console.log("Failed to parse as form data, trying JSON:", formError)
+
+      // If form data parsing fails, try JSON
+      try {
+        const jsonData = await request.json()
+        console.log("JSON Data:", JSON.stringify(jsonData, null, 2))
+
+        purchaseId = jsonData.sale_id || jsonData.purchase_id
+        email = jsonData.email
+        licenseKey = jsonData.license_key
+        productId = jsonData.product_id
+      } catch (jsonError) {
+        console.log("Failed to parse as JSON:", jsonError)
+
+        // If both fail, try text
+        try {
+          const textData = await request.text()
+          console.log("Text Data:", textData)
+
+          // Try to parse as URL-encoded form data
+          const params = new URLSearchParams(textData)
+          purchaseId = params.get("sale_id") || params.get("purchase_id")
+          email = params.get("email")
+          licenseKey = params.get("license_key")
+          productId = params.get("product_id")
+        } catch (textError) {
+          console.log("Failed to parse as text:", textError)
+        }
+      }
+    }
+
+    // Log the extracted values
+    console.log("Extracted values:", { purchaseId, email, licenseKey, productId })
+
+    // Handle missing required fields more gracefully
+    if (!purchaseId) {
+      console.log("Missing purchase ID")
+      return NextResponse.json(
+        {
+          error: "Missing purchase ID",
+          success: false,
+        },
+        { status: 400 },
+      )
+    }
+
+    if (!email) {
+      console.log("Missing email")
+      return NextResponse.json(
+        {
+          error: "Missing email",
+          success: false,
+        },
+        { status: 400 },
+      )
+    }
+
+    // License key might not always be provided by Gumroad
+    if (!licenseKey) {
+      console.log("Missing license key, generating a placeholder")
+      licenseKey = `gumroad-${Date.now()}`
     }
 
     const client = createClient()
@@ -42,9 +112,11 @@ export async function POST(request: Request) {
 
     if (existingKey.rows.length > 0) {
       serialKey = existingKey.rows[0].key
+      console.log("Found existing key:", serialKey)
     } else {
       // Generate a new serial key
       serialKey = generateSerialKey()
+      console.log("Generated new key:", serialKey)
 
       // Store the key in the database
       await client.query(
@@ -56,12 +128,22 @@ export async function POST(request: Request) {
 
     await client.end()
 
-    // You could send an email to the customer with their serial key here
-
-    return NextResponse.json({ success: true, key: serialKey })
+    // Return success response
+    return NextResponse.json({
+      success: true,
+      key: serialKey,
+      message: "License key generated successfully",
+    })
   } catch (error) {
     console.error("Error processing Gumroad webhook:", error)
-    return NextResponse.json({ error: "Failed to process webhook" }, { status: 500 })
+    return NextResponse.json(
+      {
+        error: "Failed to process webhook",
+        message: error instanceof Error ? error.message : String(error),
+        success: false,
+      },
+      { status: 500 },
+    )
   }
 }
 
