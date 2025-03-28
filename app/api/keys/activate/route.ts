@@ -4,12 +4,37 @@ import { NextResponse } from "next/server"
 import { v4 as uuidv4 } from "uuid"
 import { createClient } from "@vercel/postgres"
 
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400", // 24 hours
+    },
+  })
+}
+
 export async function POST(request: Request) {
+  // Add CORS headers to the response
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  }
+
   try {
     const { key, deviceId, machineId } = await request.json()
 
     if (!key || !deviceId || !machineId) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+      return NextResponse.json(
+        { error: "Missing required fields" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      )
     }
 
     const client = createClient()
@@ -20,61 +45,69 @@ export async function POST(request: Request) {
 
     if (keyResult.rows.length === 0) {
       await client.end()
-      return NextResponse.json({ success: false, message: "Invalid or inactive serial key" }, { status: 400 })
+      return NextResponse.json(
+        { success: false, message: "Invalid or inactive serial key" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      )
     }
 
     const serialKeyId = keyResult.rows[0].id
 
-    // Check if there's already an active activation
+    // Check if this device is activated with this key
     const activationResult = await client.query(
-      'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND is_active = true',
-      [serialKeyId],
+      'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND device_id = $2 AND machine_id = $3 AND is_active = true',
+      [serialKeyId, deviceId, machineId],
     )
 
-    if (activationResult.rows.length > 0) {
+    if (activationResult.rows.length === 0) {
       await client.end()
       return NextResponse.json(
-        { success: false, message: "This key is already activated on another device" },
-        { status: 400 },
+        { success: false, message: "This device is not activated with this key" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
       )
     }
 
-    // Check for cooldown period
-    const cooldownResult = await client.query(
-      'SELECT ends_at FROM "CooldownPeriods" WHERE serial_key_id = $1 AND is_active = true AND ends_at > NOW()',
-      [serialKeyId],
-    )
+    const activationId = activationResult.rows[0].id
 
-    if (cooldownResult.rows.length > 0) {
-      const endsAt = new Date(cooldownResult.rows[0].ends_at)
-      const now = new Date()
-      const hoursRemaining = Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60))
+    // Deactivate the activation
+    await client.query('UPDATE "Activations" SET is_active = false, deactivated_at = NOW() WHERE id = $1', [
+      activationId,
+    ])
 
-      await client.end()
-      return NextResponse.json({
-        success: false,
-        cooldown: true,
-        cooldownEnds: endsAt,
-        message: `This key is in a cooldown period. Please try again in ${hoursRemaining} hours.`,
-      })
-    }
-
-    // Create a new activation
+    // Create a cooldown period (3 days)
     await client.query(
-      `INSERT INTO "Activations" (id, serial_key_id, device_id, machine_id, activated_at, is_active)
-       VALUES ($1, $2, $3, $4, NOW(), true)`,
-      [uuidv4(), serialKeyId, deviceId, machineId],
+      `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
+       VALUES ($1, $2, NOW(), NOW() + INTERVAL '3 days', true)`,
+      [uuidv4(), serialKeyId],
     )
 
     await client.end()
 
-    return NextResponse.json({
-      success: true,
-      message: "Serial key activated successfully",
-    })
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Serial key deactivated successfully",
+        cooldownEnds: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+      },
+      {
+        headers: corsHeaders,
+      },
+    )
   } catch (error) {
-    console.error("Error activating key:", error)
-    return NextResponse.json({ error: "Failed to activate key" }, { status: 500 })
+    console.error("Error deactivating key:", error)
+    return NextResponse.json(
+      { error: "Failed to deactivate key" },
+      {
+        status: 500,
+        headers: corsHeaders,
+      },
+    )
   }
 }
 

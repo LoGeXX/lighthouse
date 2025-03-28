@@ -1,12 +1,39 @@
+export const runtime = "nodejs"
+
 import { NextResponse } from "next/server"
 import { createClient } from "@vercel/postgres"
 
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400", // 24 hours
+    },
+  })
+}
+
 export async function POST(request: Request) {
+  // Add CORS headers to the response
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  }
+
   try {
     const { key, deviceId, machineId } = await request.json()
 
     if (!key || !deviceId || !machineId) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+      return NextResponse.json(
+        { error: "Missing required fields" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      )
     }
 
     const client = createClient()
@@ -17,7 +44,13 @@ export async function POST(request: Request) {
 
     if (keyResult.rows.length === 0) {
       await client.end()
-      return NextResponse.json({ valid: false, message: "Invalid serial key" }, { status: 400 })
+      return NextResponse.json(
+        { valid: false, message: "Invalid serial key" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      )
     }
 
     const serialKeyId = keyResult.rows[0].id
@@ -25,7 +58,13 @@ export async function POST(request: Request) {
 
     if (!isKeyActive) {
       await client.end()
-      return NextResponse.json({ valid: false, message: "This serial key has been deactivated" }, { status: 400 })
+      return NextResponse.json(
+        { valid: false, message: "This serial key has been deactivated" },
+        {
+          status: 400,
+          headers: corsHeaders,
+        },
+      )
     }
 
     // Check if this device is already activated with this key
@@ -36,7 +75,12 @@ export async function POST(request: Request) {
 
     if (activationResult.rows.length > 0 && activationResult.rows[0].is_active) {
       await client.end()
-      return NextResponse.json({ valid: true, activated: true })
+      return NextResponse.json(
+        { valid: true, activated: true },
+        {
+          headers: corsHeaders,
+        },
+      )
     }
 
     // Check if there's an active activation for this key (with a different device)
@@ -47,11 +91,16 @@ export async function POST(request: Request) {
 
     if (otherActivationResult.rows.length > 0) {
       await client.end()
-      return NextResponse.json({
-        valid: true,
-        activated: false,
-        message: "This key is already activated on another device. Please deactivate it first.",
-      })
+      return NextResponse.json(
+        {
+          valid: true,
+          activated: false,
+          message: "This key is already activated on another device. Please deactivate it first.",
+        },
+        {
+          headers: corsHeaders,
+        },
+      )
     }
 
     // Check if there's an active cooldown period
@@ -66,20 +115,36 @@ export async function POST(request: Request) {
       const hoursRemaining = Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60))
 
       await client.end()
-      return NextResponse.json({
-        valid: true,
-        activated: false,
-        cooldown: true,
-        cooldownEnds: endsAt,
-        message: `This key is in a cooldown period. Please try again in ${hoursRemaining} hours.`,
-      })
+      return NextResponse.json(
+        {
+          valid: true,
+          activated: false,
+          cooldown: true,
+          cooldownEnds: endsAt,
+          message: `This key is in a cooldown period. Please try again in ${hoursRemaining} hours.`,
+        },
+        {
+          headers: corsHeaders,
+        },
+      )
     }
 
     await client.end()
-    return NextResponse.json({ valid: true, activated: false })
+    return NextResponse.json(
+      { valid: true, activated: false },
+      {
+        headers: corsHeaders,
+      },
+    )
   } catch (error) {
     console.error("Error validating key:", error)
-    return NextResponse.json({ error: "Failed to validate key" }, { status: 500 })
+    return NextResponse.json(
+      { error: "Failed to validate key" },
+      {
+        status: 500,
+        headers: corsHeaders,
+      },
+    )
   }
 }
 
