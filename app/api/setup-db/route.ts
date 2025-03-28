@@ -3,7 +3,26 @@ export const runtime = "nodejs"
 import { NextResponse } from "next/server"
 import { createClient } from "@vercel/postgres"
 
+// Add CORS headers
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400", // 24 hours
+    },
+  })
+}
+
 export async function GET() {
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  }
+
   try {
     const client = createClient()
     await client.connect()
@@ -47,10 +66,10 @@ export async function GET() {
 
     await client.end()
 
-    return NextResponse.json({ success: true, message: "Database setup complete" })
+    return NextResponse.json({ success: true, message: "Database setup complete" }, { headers: corsHeaders })
   } catch (error) {
     console.error("Error setting up database:", error)
-    return NextResponse.json({ error: "Failed to set up database" }, { status: 500 })
+    return NextResponse.json({ error: "Failed to set up database" }, { status: 500, headers: corsHeaders })
   }
 }
 
