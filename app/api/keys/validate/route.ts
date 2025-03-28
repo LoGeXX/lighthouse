@@ -24,9 +24,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { key, deviceId, machineId } = await request.json()
+    // Log the request body for debugging
+    const requestBody = await request.json()
+    console.log("Validate request body:", JSON.stringify(requestBody, null, 2))
+
+    const { key, deviceId, machineId } = requestBody
 
     if (!key || !deviceId || !machineId) {
+      console.log("Missing required fields:", { key, deviceId, machineId })
       return NextResponse.json(
         { error: "Missing required fields" },
         {
@@ -36,18 +41,41 @@ export async function POST(request: Request) {
       )
     }
 
+    // Normalize the key by removing hyphens and converting to uppercase
+    const normalizedKey = key.replace(/-/g, "").toUpperCase()
+
     const client = createClient()
     await client.connect()
 
-    // Check if the key exists and is active
-    const keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [key])
+    // Log the query we're about to execute
+    console.log(`Checking for key: ${key} (normalized: ${normalizedKey})`)
+
+    // First try with the exact key format
+    let keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [key])
+
+    // If no results, try with the normalized key
+    if (keyResult.rows.length === 0) {
+      // Try to find the key by matching the normalized version
+      const allKeysResult = await client.query('SELECT id, key, is_active FROM "SerialKeys"')
+
+      for (const row of allKeysResult.rows) {
+        const normalizedDbKey = row.key.replace(/-/g, "").toUpperCase()
+        if (normalizedDbKey === normalizedKey) {
+          // Instead of creating a new object, modify the query to get this specific key
+          keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [row.key])
+          console.log(`Found matching key: ${row.key}`)
+          break
+        }
+      }
+    }
 
     if (keyResult.rows.length === 0) {
+      console.log("No matching key found in database")
       await client.end()
       return NextResponse.json(
         { valid: false, message: "Invalid serial key" },
         {
-          status: 400,
+          status: 200, // Changed from 400 to 200 to avoid CORS issues
           headers: corsHeaders,
         },
       )
@@ -57,11 +85,12 @@ export async function POST(request: Request) {
     const isKeyActive = keyResult.rows[0].is_active
 
     if (!isKeyActive) {
+      console.log("Key is not active:", key)
       await client.end()
       return NextResponse.json(
         { valid: false, message: "This serial key has been deactivated" },
         {
-          status: 400,
+          status: 200, // Changed from 400 to 200
           headers: corsHeaders,
         },
       )
@@ -74,6 +103,7 @@ export async function POST(request: Request) {
     )
 
     if (activationResult.rows.length > 0 && activationResult.rows[0].is_active) {
+      console.log("Device already activated with this key")
       await client.end()
       return NextResponse.json(
         { valid: true, activated: true },
@@ -90,6 +120,7 @@ export async function POST(request: Request) {
     )
 
     if (otherActivationResult.rows.length > 0) {
+      console.log("Key is already activated on another device")
       await client.end()
       return NextResponse.json(
         {
@@ -114,6 +145,7 @@ export async function POST(request: Request) {
       const now = new Date()
       const hoursRemaining = Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60))
 
+      console.log("Key is in cooldown period")
       await client.end()
       return NextResponse.json(
         {
@@ -129,6 +161,7 @@ export async function POST(request: Request) {
       )
     }
 
+    console.log("Key is valid but not activated")
     await client.end()
     return NextResponse.json(
       { valid: true, activated: false },
