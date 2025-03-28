@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     const requestBody = await request.json()
     console.log("Validate request body:", JSON.stringify(requestBody, null, 2))
 
-    const { key, deviceId, machineId, gumroadValidated } = requestBody
+    const { key, deviceId, machineId, gumroadValidated, gumroadLicenseKey } = requestBody
 
     if (!key || !deviceId || !machineId) {
       console.log("Missing required fields:", { key, deviceId, machineId })
@@ -50,8 +50,13 @@ export async function POST(request: Request) {
 
     // If the key was already validated by Gumroad, we can skip some validation steps
     if (gumroadValidated) {
-      // Check if this key exists in our database
-      let keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [key])
+      // Check if this key exists in our database - first try as gumroad_license_key
+      let keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE gumroad_license_key = $1', [key])
+
+      // If not found, try as regular key as fallback
+      if (keyResult.rows.length === 0) {
+        keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [key])
+      }
 
       // If not found, create a new entry for this Gumroad key
       if (keyResult.rows.length === 0) {
@@ -141,23 +146,12 @@ export async function POST(request: Request) {
         },
       )
     } else {
-      // First try with the exact key format
-      let keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [key])
+      // First try with gumroad_license_key
+      let keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE gumroad_license_key = $1', [key])
 
-      // If no results, try with the normalized key
+      // If not found, try with the exact key format as fallback
       if (keyResult.rows.length === 0) {
-        // Try to find the key by matching the normalized version
-        const allKeysResult = await client.query('SELECT id, key, is_active FROM "SerialKeys"')
-
-        for (const row of allKeysResult.rows) {
-          const normalizedDbKey = row.key.replace(/-/g, "").toUpperCase()
-          if (normalizedDbKey === normalizedKey) {
-            // Instead of creating a new object, modify the query to get this specific key
-            keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [row.key])
-            console.log(`Found matching key: ${row.key}`)
-            break
-          }
-        }
+        keyResult = await client.query('SELECT id, is_active FROM "SerialKeys" WHERE key = $1', [key])
       }
 
       if (keyResult.rows.length === 0) {

@@ -29,10 +29,11 @@ export async function POST(request: Request) {
     const requestBody = await request.json()
     console.log("Activate request body:", JSON.stringify(requestBody, null, 2))
 
-    const { key, deviceId, machineId } = requestBody
+    const { key, deviceId, machineId, gumroadLicenseKey } = requestBody
+    const licenseKeyToCheck = gumroadLicenseKey || key
 
-    if (!key || !deviceId || !machineId) {
-      console.log("Missing required fields:", { key, deviceId, machineId })
+    if (!licenseKeyToCheck || !deviceId || !machineId) {
+      console.log("Missing required fields:", { licenseKeyToCheck, deviceId, machineId })
       return NextResponse.json(
         { error: "Missing required fields" },
         {
@@ -43,36 +44,25 @@ export async function POST(request: Request) {
     }
 
     // Normalize the key by removing hyphens and converting to uppercase
-    const normalizedKey = key.replace(/-/g, "").toUpperCase()
+    const normalizedKey = licenseKeyToCheck.replace(/-/g, "").toUpperCase()
 
     const client = createClient()
     await client.connect()
 
     // Log the query we're about to execute
-    console.log(`Checking for key: ${key} (normalized: ${normalizedKey})`)
+    console.log(`Checking for key: ${licenseKeyToCheck} (normalized: ${normalizedKey})`)
 
-    // First try with the exact key format
-    let keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE key = $1 AND is_active = true', [key])
+    // First try with gumroad_license_key
+    let keyResult = await client.query(
+      'SELECT id FROM "SerialKeys" WHERE gumroad_license_key = $1 AND is_active = true',
+      [licenseKeyToCheck],
+    )
 
-    // If no results, try with the normalized key
+    // If not found, try with the exact key format as fallback
     if (keyResult.rows.length === 0) {
-      // Try to find the key by matching the normalized version
-      const allKeysResult = await client.query('SELECT id, key, is_active FROM "SerialKeys" WHERE is_active = true')
-
-      let matchingKey = null
-      for (const row of allKeysResult.rows) {
-        const normalizedDbKey = row.key.replace(/-/g, "").toUpperCase()
-        if (normalizedDbKey === normalizedKey) {
-          matchingKey = row.key
-          console.log(`Found matching key: ${row.key}`)
-          break
-        }
-      }
-
-      if (matchingKey) {
-        // Query again with the exact matching key
-        keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE key = $1 AND is_active = true', [matchingKey])
-      }
+      keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE key = $1 AND is_active = true', [
+        licenseKeyToCheck,
+      ])
     }
 
     if (keyResult.rows.length === 0) {
