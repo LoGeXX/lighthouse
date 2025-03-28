@@ -89,74 +89,19 @@ export async function POST(request: Request) {
 
     const serialKeyId = keyResult.rows[0].id
 
-    // Check if this device/machine has been activated before with this key
-    const existingActivationResult = await client.query(
-      'SELECT id, is_active FROM "Activations" WHERE serial_key_id = $1 AND device_id = $2 AND machine_id = $3',
-      [serialKeyId, deviceId, machineId],
-    )
-
-    // If this device was previously activated with this key, just reactivate it
-    if (existingActivationResult.rows.length > 0) {
-      // If it's already active, just return success
-      if (existingActivationResult.rows[0].is_active) {
-        console.log("Device already activated with this key")
-        await client.end()
-        return NextResponse.json(
-          {
-            success: true,
-            message: "Device already activated with this key",
-          },
-          {
-            headers: corsHeaders,
-          },
-        )
-      }
-
-      // Otherwise, reactivate it
-      await client.query(
-        `UPDATE "Activations" 
-         SET is_active = true, 
-             activated_at = NOW(), 
-             deactivated_at = NULL 
-         WHERE id = $1`,
-        [existingActivationResult.rows[0].id],
-      )
-
-      console.log("Reactivated existing device")
-
-      // Clean up any cooldown periods for this key
-      await client.query(
-        `UPDATE "CooldownPeriods" 
-         SET is_active = false 
-         WHERE serial_key_id = $1`,
-        [serialKeyId],
-      )
-
-      await client.end()
-      return NextResponse.json(
-        {
-          success: true,
-          message: "Serial key reactivated successfully",
-        },
-        {
-          headers: corsHeaders,
-        },
-      )
-    }
-
-    // Check if there's already an active activation for this key (with a different device)
-    const otherActivationResult = await client.query(
+    // Check if there's already an active activation
+    const activationResult = await client.query(
       'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND is_active = true',
       [serialKeyId],
     )
 
-    if (otherActivationResult.rows.length > 0) {
+    if (activationResult.rows.length > 0) {
       console.log("Key is already activated on another device")
       await client.end()
       return NextResponse.json(
-        { success: false, message: "This key is already activated on another device. Please deactivate it first." },
+        { success: false, message: "This key is already activated on another device" },
         {
-          status: 200,
+          status: 200, // Changed from 400 to 200
           headers: corsHeaders,
         },
       )
@@ -195,9 +140,6 @@ export async function POST(request: Request) {
       [uuidv4(), serialKeyId, deviceId, machineId],
     )
 
-    // Clean up old cooldown periods
-    await cleanupCooldownPeriods(client)
-
     console.log("Key activated successfully")
     await client.end()
 
@@ -219,24 +161,6 @@ export async function POST(request: Request) {
         headers: corsHeaders,
       },
     )
-  }
-}
-
-// Function to clean up old cooldown periods
-async function cleanupCooldownPeriods(client: any) {
-  try {
-    // Delete expired cooldown periods
-    const result = await client.query(
-      `DELETE FROM "CooldownPeriods" 
-       WHERE ends_at < NOW() OR is_active = false`,
-    )
-
-    console.log(`Cleaned up ${result.rowCount} expired cooldown periods`)
-
-    return result.rowCount
-  } catch (error) {
-    console.error("Error cleaning up cooldown periods:", error)
-    return 0
   }
 }
 

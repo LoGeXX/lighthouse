@@ -114,36 +114,12 @@ export async function POST(request: Request) {
       activationId,
     ])
 
-    // Check if there's an existing active cooldown period for this key
-    const existingCooldownResult = await client.query(
-      'SELECT id FROM "CooldownPeriods" WHERE serial_key_id = $1 AND is_active = true',
-      [serialKeyId],
+    // Create a cooldown period (2 hours)
+    await client.query(
+      `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
+       VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
+      [uuidv4(), serialKeyId],
     )
-
-    if (existingCooldownResult.rows.length > 0) {
-      // Update the existing cooldown period instead of creating a new one
-      await client.query(
-        `UPDATE "CooldownPeriods" 
-         SET started_at = NOW(), 
-             ends_at = NOW() + INTERVAL '2 hours' 
-         WHERE id = $1`,
-        [existingCooldownResult.rows[0].id],
-      )
-
-      console.log("Updated existing cooldown period")
-    } else {
-      // Create a new cooldown period (2 hours)
-      await client.query(
-        `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
-         VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
-        [uuidv4(), serialKeyId],
-      )
-
-      console.log("Created new cooldown period")
-    }
-
-    // Clean up old cooldown periods
-    await cleanupCooldownPeriods(client)
 
     console.log("Key deactivated successfully")
     await client.end()
@@ -167,24 +143,6 @@ export async function POST(request: Request) {
         headers: corsHeaders,
       },
     )
-  }
-}
-
-// Function to clean up old cooldown periods
-async function cleanupCooldownPeriods(client: any) {
-  try {
-    // Delete expired cooldown periods
-    const result = await client.query(
-      `DELETE FROM "CooldownPeriods" 
-       WHERE ends_at < NOW() OR is_active = false`,
-    )
-
-    console.log(`Cleaned up ${result.rowCount} expired cooldown periods`)
-
-    return result.rowCount
-  } catch (error) {
-    console.error("Error cleaning up cooldown periods:", error)
-    return 0
   }
 }
 
