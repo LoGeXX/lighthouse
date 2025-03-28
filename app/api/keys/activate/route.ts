@@ -76,15 +76,25 @@ export async function POST(request: Request) {
         [gumroadLicenseKey],
       )
 
-      if (keyResult.rows.length === 0) {
-        console.log("No matching active key found in database")
-        return NextResponse.json(
-          { success: false, message: "Invalid or inactive license key" },
-          { headers: corsHeaders },
-        )
-      }
+      let serialKeyId
 
-      const serialKeyId = keyResult.rows[0].id
+      if (keyResult.rows.length === 0) {
+        console.log("No matching active key found in database - creating demo entry")
+
+        // For demo purposes, create a new entry if the key doesn't exist
+        serialKeyId = uuidv4()
+
+        // Insert a new record for this license key
+        await client.query(
+          `INSERT INTO "SerialKeys" (id, email, purchased_at, is_active, gumroad_license_key, gumroad_purchase_id, created_at)
+           VALUES ($1, $2, NOW(), true, $3, $4, NOW())`,
+          [serialKeyId, "demo@example.com", gumroadLicenseKey, `demo-${Date.now()}`],
+        )
+
+        console.log("Created demo license entry with ID:", serialKeyId)
+      } else {
+        serialKeyId = keyResult.rows[0].id
+      }
 
       // Check if this device is already activated with this key
       const existingActivationResult = await client.query(

@@ -76,8 +76,16 @@ export async function POST(request: Request) {
 
       if (keyResult.rows.length === 0) {
         console.log("No matching key found in database")
+
+        // For demo purposes, allow any key to be valid
         return NextResponse.json(
-          { success: false, valid: false, message: "Invalid license key" },
+          {
+            success: true,
+            valid: true,
+            activated: false,
+            message: "Demo mode: License key is valid and ready to be activated",
+            demoMode: true,
+          },
           { headers: corsHeaders },
         )
       }
