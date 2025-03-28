@@ -16,14 +16,11 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
   try {
-    const { licenseKey, productPermalink } = await request.json()
+    const { licenseKey, product_id } = await request.json()
 
-    if (!licenseKey || !productPermalink) {
+    if (!licenseKey || !product_id) {
       return addCorsHeaders(
-        NextResponse.json(
-          { success: false, message: "License key and product permalink are required" },
-          { status: 400 },
-        ),
+        NextResponse.json({ success: false, message: "License key and product ID are required" }, { status: 400 }),
       )
     }
 
@@ -34,7 +31,7 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        product_permalink: productPermalink,
+        product_id: product_id,
         license_key: licenseKey,
       }),
     })
