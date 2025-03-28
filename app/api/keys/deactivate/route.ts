@@ -29,10 +29,13 @@ export async function POST(request: Request) {
     const requestBody = await request.json()
     console.log("Deactivate request body:", JSON.stringify(requestBody, null, 2))
 
-    const { key, deviceId, machineId } = requestBody
+    const { key, gumroadLicenseKey, deviceId, machineId } = requestBody
 
-    if (!key || !deviceId || !machineId) {
-      console.log("Missing required fields:", { key, deviceId, machineId })
+    // Determine which key to use - prioritize gumroadLicenseKey
+    const licenseKey = gumroadLicenseKey || key
+
+    if (!licenseKey || !deviceId || !machineId) {
+      console.log("Missing required fields:", { licenseKey, deviceId, machineId })
       return NextResponse.json(
         { error: "Missing required fields" },
         {
@@ -42,98 +45,84 @@ export async function POST(request: Request) {
       )
     }
 
-    // Normalize the key by removing hyphens and converting to uppercase
-    const normalizedKey = key.replace(/-/g, "").toUpperCase()
-
     const client = createClient()
     await client.connect()
 
-    // Log the query we're about to execute
-    console.log(`Checking for key: ${key} (normalized: ${normalizedKey})`)
+    try {
+      // First try with gumroadLicenseKey field
+      console.log(`Checking for gumroadLicenseKey: ${licenseKey}`)
+      let keyResult = await client.query(
+        'SELECT id FROM "SerialKeys" WHERE gumroad_license_key = $1 AND is_active = true',
+        [licenseKey],
+      )
 
-    // First try with the exact key format
-    let keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE key = $1 AND is_active = true', [key])
-
-    // If no results, try with the normalized key
-    if (keyResult.rows.length === 0) {
-      // Try to find the key by matching the normalized version
-      const allKeysResult = await client.query('SELECT id, key, is_active FROM "SerialKeys" WHERE is_active = true')
-
-      let matchingKey = null
-      for (const row of allKeysResult.rows) {
-        const normalizedDbKey = row.key.replace(/-/g, "").toUpperCase()
-        if (normalizedDbKey === normalizedKey) {
-          matchingKey = row.key
-          console.log(`Found matching key: ${row.key}`)
-          break
-        }
+      // If not found, try with the key field as fallback
+      if (keyResult.rows.length === 0) {
+        console.log(`No match for gumroadLicenseKey, checking key field: ${licenseKey}`)
+        keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE key = $1 AND is_active = true', [licenseKey])
       }
 
-      if (matchingKey) {
-        // Query again with the exact matching key
-        keyResult = await client.query('SELECT id FROM "SerialKeys" WHERE key = $1 AND is_active = true', [matchingKey])
+      if (keyResult.rows.length === 0) {
+        console.log("No matching active key found in database")
+        return NextResponse.json(
+          { success: false, message: "Invalid or inactive serial key" },
+          {
+            status: 200, // Changed from 400 to 200
+            headers: corsHeaders,
+          },
+        )
       }
-    }
 
-    if (keyResult.rows.length === 0) {
-      console.log("No matching active key found in database")
-      await client.end()
+      const serialKeyId = keyResult.rows[0].id
+
+      // Check if this device is activated with this key
+      const activationResult = await client.query(
+        'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND device_id = $2 AND machine_id = $3 AND is_active = true',
+        [serialKeyId, deviceId, machineId],
+      )
+
+      if (activationResult.rows.length === 0) {
+        console.log("Device is not activated with this key")
+        return NextResponse.json(
+          { success: false, message: "This device is not activated with this key" },
+          {
+            status: 200, // Changed from 400 to 200
+            headers: corsHeaders,
+          },
+        )
+      }
+
+      const activationId = activationResult.rows[0].id
+
+      // Deactivate the activation
+      await client.query('UPDATE "Activations" SET is_active = false, deactivated_at = NOW() WHERE id = $1', [
+        activationId,
+      ])
+
+      // Create a cooldown period (2 hours)
+      await client.query(
+        `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
+         VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
+        [uuidv4(), serialKeyId],
+      )
+
+      console.log("Key deactivated successfully")
       return NextResponse.json(
-        { success: false, message: "Invalid or inactive serial key" },
         {
-          status: 200, // Changed from 400 to 200
+          success: true,
+          message: "Serial key deactivated successfully",
+          cooldownEnds: new Date(Date.now() + 2 * 60 * 60 * 1000),
+        },
+        {
           headers: corsHeaders,
         },
       )
+    } finally {
+      // Ensure client is closed even if there's an error
+      if (client) {
+        await client.end().catch(console.error)
+      }
     }
-
-    const serialKeyId = keyResult.rows[0].id
-
-    // Check if this device is activated with this key
-    const activationResult = await client.query(
-      'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND device_id = $2 AND machine_id = $3 AND is_active = true',
-      [serialKeyId, deviceId, machineId],
-    )
-
-    if (activationResult.rows.length === 0) {
-      console.log("Device is not activated with this key")
-      await client.end()
-      return NextResponse.json(
-        { success: false, message: "This device is not activated with this key" },
-        {
-          status: 200, // Changed from 400 to 200
-          headers: corsHeaders,
-        },
-      )
-    }
-
-    const activationId = activationResult.rows[0].id
-
-    // Deactivate the activation
-    await client.query('UPDATE "Activations" SET is_active = false, deactivated_at = NOW() WHERE id = $1', [
-      activationId,
-    ])
-
-    // Create a cooldown period (2 hours)
-    await client.query(
-      `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
-       VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
-      [uuidv4(), serialKeyId],
-    )
-
-    console.log("Key deactivated successfully")
-    await client.end()
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Serial key deactivated successfully",
-        cooldownEnds: new Date(Date.now() + 2 * 60 * 60 * 1000),
-      },
-      {
-        headers: corsHeaders,
-      },
-    )
   } catch (error) {
     console.error("Error deactivating key:", error)
     return NextResponse.json(
