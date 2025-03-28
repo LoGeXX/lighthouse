@@ -110,7 +110,14 @@ export async function POST(request: Request) {
       if (activationResult.rows.length > 0 && activationResult.rows[0].is_active) {
         console.log("Device already activated with this key")
         return NextResponse.json(
-          { success: true, valid: true, activated: true, message: "License is valid and activated on this device" },
+          {
+            success: true,
+            valid: true,
+            activated: true,
+            message: "License is valid and activated on this device",
+            deviceId,
+            machineId,
+          },
           { headers: corsHeaders },
         )
       }
@@ -129,6 +136,7 @@ export async function POST(request: Request) {
             valid: true,
             activated: false,
             message: "This license key is already activated on another device. Please deactivate it first.",
+            alreadyActivated: true,
           },
           { headers: corsHeaders },
         )
