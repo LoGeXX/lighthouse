@@ -89,13 +89,13 @@ export async function POST(request: Request) {
 
     const serialKeyId = keyResult.rows[0].id
 
-    // Check if there's already an active activation
-    const activationResult = await client.query(
+    // Check if there's already an active activation for this key (with any device)
+    const activeActivationResult = await client.query(
       'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND is_active = true',
       [serialKeyId],
     )
 
-    if (activationResult.rows.length > 0) {
+    if (activeActivationResult.rows.length > 0) {
       console.log("Key is already activated on another device")
       await client.end()
       return NextResponse.json(
@@ -133,12 +133,37 @@ export async function POST(request: Request) {
       )
     }
 
-    // Create a new activation
-    await client.query(
-      `INSERT INTO "Activations" (id, serial_key_id, device_id, machine_id, activated_at, is_active)
-       VALUES ($1, $2, $3, $4, NOW(), true)`,
-      [uuidv4(), serialKeyId, deviceId, machineId],
+    // Check if this device/machine has been activated before with this key
+    const existingActivationResult = await client.query(
+      'SELECT id FROM "Activations" WHERE serial_key_id = $1 AND device_id = $2 AND machine_id = $3',
+      [serialKeyId, deviceId, machineId],
     )
+
+    if (existingActivationResult.rows.length > 0) {
+      // Update the existing activation instead of creating a new one
+      await client.query(
+        `UPDATE "Activations" 
+         SET is_active = true, 
+             activated_at = NOW(), 
+             deactivated_at = NULL 
+         WHERE id = $1`,
+        [existingActivationResult.rows[0].id],
+      )
+
+      console.log("Updated existing activation")
+    } else {
+      // Create a new activation
+      await client.query(
+        `INSERT INTO "Activations" (id, serial_key_id, device_id, machine_id, activated_at, is_active)
+         VALUES ($1, $2, $3, $4, NOW(), true)`,
+        [uuidv4(), serialKeyId, deviceId, machineId],
+      )
+
+      console.log("Created new activation")
+    }
+
+    // Clean up old cooldown periods
+    await cleanupCooldownPeriods(client)
 
     console.log("Key activated successfully")
     await client.end()
@@ -161,6 +186,24 @@ export async function POST(request: Request) {
         headers: corsHeaders,
       },
     )
+  }
+}
+
+// Function to clean up old cooldown periods
+async function cleanupCooldownPeriods(client: any) {
+  try {
+    // Delete expired cooldown periods
+    const result = await client.query(
+      `DELETE FROM "CooldownPeriods" 
+       WHERE ends_at < NOW() OR is_active = false`,
+    )
+
+    console.log(`Cleaned up ${result.rowCount} expired cooldown periods`)
+
+    return result.rowCount
+  } catch (error) {
+    console.error("Error cleaning up cooldown periods:", error)
+    return 0
   }
 }
 

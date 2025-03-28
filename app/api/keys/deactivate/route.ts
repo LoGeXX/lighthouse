@@ -114,12 +114,15 @@ export async function POST(request: Request) {
       activationId,
     ])
 
-    // Create a cooldown period (3 days)
+    // Create a cooldown period (2 hours)
     await client.query(
       `INSERT INTO "CooldownPeriods" (id, serial_key_id, started_at, ends_at, is_active)
-       VALUES ($1, $2, NOW(), NOW() + INTERVAL '3 days', true)`,
+       VALUES ($1, $2, NOW(), NOW() + INTERVAL '2 hours', true)`,
       [uuidv4(), serialKeyId],
     )
+
+    // Clean up old cooldown periods
+    await cleanupCooldownPeriods(client)
 
     console.log("Key deactivated successfully")
     await client.end()
@@ -128,7 +131,7 @@ export async function POST(request: Request) {
       {
         success: true,
         message: "Serial key deactivated successfully",
-        cooldownEnds: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+        cooldownEnds: new Date(Date.now() + 2 * 60 * 60 * 1000),
       },
       {
         headers: corsHeaders,
@@ -143,6 +146,24 @@ export async function POST(request: Request) {
         headers: corsHeaders,
       },
     )
+  }
+}
+
+// Function to clean up old cooldown periods
+async function cleanupCooldownPeriods(client: any) {
+  try {
+    // Delete expired cooldown periods
+    const result = await client.query(
+      `DELETE FROM "CooldownPeriods" 
+       WHERE ends_at < NOW() OR is_active = false`,
+    )
+
+    console.log(`Cleaned up ${result.rowCount} expired cooldown periods`)
+
+    return result.rowCount
+  } catch (error) {
+    console.error("Error cleaning up cooldown periods:", error)
+    return 0
   }
 }
 
